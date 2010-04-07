@@ -1,0 +1,175 @@
+This package includes:
+
+* FTSSP010 I2S ASoC (ALSA Soc) audio driver
+* prebuilt EABI alsa-lib and glibc shared libraries - usr.tgz and lib.tgz
+* prebuilt EABI alsa-utils - alsa-utils.tgz
+
+Usage:
+
+(2) apply the following patch to sound/soc/codecs/wm8731.c
+------------------------>8-------------------------->8------------------------
+@@ -422,7 +422,7 @@
+                break;
+        case SND_SOC_BIAS_STANDBY:
+                /* everything off except vref/vmid, */
+-               wm8731_write(codec, WM8731_PWR, reg | 0x0040);
++               wm8731_write(codec, WM8731_PWR, reg);
+                break;
+        case SND_SOC_BIAS_OFF:
+                /* everything off, dac mute, inactive */
+------------------------>8-------------------------->8------------------------
+This patch makes sure that CLKOUT of wm8731 will not be powered down.
+
+We choose external clock source (X_SSP_CLK) as SSP0 clock input by setting
+bit 4 of SCLK_CFG1 register of SCU010. The external clock source (X_SSP_CLK)
+comes from CLKOUT of wm8731 on A369 evb. The wm8731 codec driver in Linux gates
+CLKOUT by default. We need to apply this patch or there will be no external
+clock.
+
+
+(3) make sure the following config options are set and then compile kernel
+
+CONFIG_SOUND=y
+CONFIG_SND=y
+ONFIG_SND_SOC=y
+CONFIG_SND_SOC_WM8731=y
+
+
+(4) install shared libraries needed by alsa-utils
+
+decompress lib.tgz and usr.tgz into rootfs
+
+
+(5) create device files
+
+(5.a) if you built FTSSP010 audio driver as modules
+
+$ mkdir /dev/snd
+$ mknod /dev/snd/controlC0 c 116 0
+$ mknod /dev/snd/pcmC0D0p c 116 16
+$ mknod /dev/snd/pcmC0D0c c 116 24
+$ mknod /dev/snd/timer c 116 33
+
+(5.b) if you built FTSSP010 audio drvier into kernel
+
+The device files will be created automatically, but may be in wrong path.
+You might need to create symbolic links manually.
+
+$ mkdir /dev/snd
+$ ln -s /dev/controlC0 /dev/snd/controlC0
+$ ln -s /dev/pcmC0D0p /dev/snd/pcmC0D0p
+$ ln -s /dev/pcmC0D0c /dev/snd/pcmC0D0c
+$ ln -s /dev/timer /dev/snd/timer
+
+
+(6) turn on <HiFi Playback Switch> and <Line Capture Switch>
+
+The wm8731 codec driver by default turns off the <HiFi Playback Switch> which
+connects <DAC> and <Output Mixer>. We should turn it on before playing audio,
+or there will be no sound.
+
+<Line Capture Switch> is also turned off by default. It connects <Line Input>
+and <Input Mux>. We should turn it on before recording.
+
+(6.a) get current configuration
+
+$ alsactl store
+
+File /etc/asound.state will be created.
+
+(6.b) modify /etc/asound.state
+
+------------------------>8-------------------------->8------------------------
+	control.4 {
+		comment.access 'read write'
+		comment.type BOOLEAN
+		comment.count 2
+		iface MIXER
+		name 'Line Capture Switch'
+-		value.0 false
+-		value.1 false
++		value.0 true
++		value.1 true
+	}
+------------------------>8-------------------------->8------------------------
+------------------------>8-------------------------->8------------------------
+	control.14 {
+		comment.access 'read write'
+		comment.type BOOLEAN
+		comment.count 1
+		iface MIXER
+		name 'Output Mixer HiFi Playback Swit'
+-		value false
++		value true
+	}
+------------------------>8-------------------------->8------------------------
+
+(6.c) apply the new configuration.
+
+$ alsactl restore
+
+(7) use aplay and arecord
+
+$ ./aplay/arecord -d 10 -r 96000 -f s16 -c 2 /test.wav
+$ ./aplay/aplay /test.wav
+
+use -h option for help
+
+
+******************************************************************************
+How to build alsa-lib and alsa-utils:
+
+(1) build ncurses-5.7 library for alsa-mixer
+
+$ tar -xvzf ncurses-5.7.tar.gz
+$ cd ncurses-5.7
+$ make
+
+	* install ncurses library to /tmp for compiling alsa-utils
+
+$ make install.libs DESTDIR=/tmp
+
+
+(2) build alsa-lib (ALSA user space library)
+
+$ tar -xvjf alsa-lib-1.0.22.tar.bz2
+$ cd alsa-lib-1.0.22
+$ ./configure --host=arm-none-linux-gnueabi --disable-python
+$ make
+
+	* install alsa-lib to /tmp for compiling alsa-utils
+
+$ make install DESTDIR=/tmp
+
+	* install alsa-lib to rootfs for runtime use
+
+$ make install DESTDIR=/home/ratbert/linux/FA5A320LINUX26_RAMDISK/rootfs
+
+
+(3) build alsa-utils (ALSA utility)
+
+$ tar -xvjf alsa-utils-1.0.22.tar.bz2
+$ cd alsa-utils-1.0.22
+
+	* tell configure script where alsa-lib is
+
+$ ./configure --host=arm-none-linux-gnueabi --disable-xmlto --with-alsa-inc-prefix=/tmp/usr/include --with-alsa-prefix=/tmp/usr/lib
+
+	* some hacking:
+		* modify alsamixer/Makefile to specify the include and library search path to where libncurses is
+		* this is dirty, but I did not find more elegant way
+
+------------------------>8-------------------------->8------------------------
+-CURSES_CFLAGS = -I/usr/include/ncurses
++CURSES_CFLAGS = -I/tmp/usr/include/ncurses
+
+-AM_CFLAGS = -I/usr/include/ncurses -DCURSESINC="<ncurses.h>"
++AM_CFLAGS = -I/tmp/usr/include/ncurses -DCURSESINC="<ncurses.h>"
+------------------------>8-------------------------->8------------------------
+
+$ make
+
+	* install to where you prefer
+
+$ make install DESTDIR=/home/ratbert/linux/alsa-utils
+
