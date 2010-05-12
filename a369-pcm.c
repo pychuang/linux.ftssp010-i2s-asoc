@@ -383,11 +383,10 @@ static int a369_snd_soc_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stre
 	buf->area		= dma_alloc_writecombine(pcm->card->dev, size,
 					&buf->addr, GFP_KERNEL);
 
-	printk(KERN_DEBUG "preallocate_dma_buffer: area=%p, addr=%p, size=%x\n",
-		(void *) buf->area, (void *) buf->addr, size);
-
-	if (!buf->area)
+	if (!buf->area) {
+		printk(KERN_ERR "Failed to preallocate dma buffer\n");
 		return -ENOMEM;
+	}
 
 	buf->bytes = size;
 	return 0;
