@@ -42,9 +42,9 @@
  * struct snd_soc_ops functions
  *****************************************************************************/
 /**
- * @brief Setup according to hardware parameters
+ * a369evb_snd_soc_hw_params() - Setup according to hardware parameters
  *
- * Called by soc_pcm_hw_params()
+ * Called by soc_pcm_hw_params().
  */
 static int a369evb_snd_soc_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
@@ -139,9 +139,9 @@ static const struct snd_soc_dapm_route audio_map[] = {
  * struct snd_soc_device functions
  *****************************************************************************/
 /**
- * @brief setup DAPM stuff
+ * a369evb_wm8731_init() - setup DAPM stuff
  *
- * Called by snd_soc_register_card()
+ * Called by snd_soc_register_card().
  */
 static int a369evb_wm8731_init(struct snd_soc_codec *codec)
 {
@@ -156,8 +156,8 @@ static int a369evb_wm8731_init(struct snd_soc_codec *codec)
 	return 0;
 }
 
-/**
- * @brief a369evb digital audio interface glue - connects codec <--> CPU
+/*
+ * a369evb digital audio interface glue - connects codec <--> CPU
  */
 static struct snd_soc_dai_link a369evb_snd_soc_dai_link = {
 	.name		= "WM8731",
@@ -168,8 +168,8 @@ static struct snd_soc_dai_link a369evb_snd_soc_dai_link = {
 	.ops		= &a369evb_snd_soc_ops,
 };
 
-/**
- * @brief a369evb audio machine driver
+/*
+ * a369evb audio machine driver
  *
  * Board specific stuffs
  */
@@ -179,8 +179,8 @@ static struct snd_soc_machine a369evb_snd_soc_machine = {
 	.num_links	= 1,
 };
 
-/**
- * @brief a369evb audio private data
+/*
+ * a369evb audio private data
  *
  * Codec data
  */
@@ -189,8 +189,8 @@ static struct wm8731_setup_data a369evb_wm8731_setup_data = {
 	.i2c_address	= 0x1b,
 };
 
-/**
- * @brief a369evb audio subsystem
+/*
+ * a369evb audio subsystem
  *
  * This structure collects all the stuffs
  */

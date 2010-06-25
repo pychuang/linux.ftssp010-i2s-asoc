@@ -63,9 +63,9 @@ static irqreturn_t ftssp010_i2s_interrupt(int irq, void *dev_id)
  * struct snd_soc_ops functions
  *****************************************************************************/
 /**
- * @brief Open CPU DAI
+ * ftssp010_i2s_startup() - Open CPU DAI
  *
- * Called by soc_pcm_open()
+ * Called by soc_pcm_open().
  */
 static int ftssp010_i2s_startup(struct snd_pcm_substream *substream)
 {
@@ -78,9 +78,9 @@ static int ftssp010_i2s_startup(struct snd_pcm_substream *substream)
 }
 
 /**
- * @brief Setup CPU DAI resources according to hardware parameters
+ * ftssp010_i2s_hw_params() - Setup CPU DAI resources according to hardware parameters
  *
- * Called by soc_pcm_hw_params()
+ * Called by soc_pcm_hw_params().
  */
 static int ftssp010_i2s_hw_params(struct snd_pcm_substream *substream,
 		struct snd_pcm_hw_params *params)
@@ -167,9 +167,9 @@ static int ftssp010_i2s_hw_params(struct snd_pcm_substream *substream,
 }
 
 /**
- * @brief CPU DAI preparation
+ * ftssp010_i2s_prepare() - CPU DAI preparation
  *
- * Called by soc_pcm_prepare()
+ * Called by soc_pcm_prepare().
  */
 static int ftssp010_i2s_prepare(struct snd_pcm_substream *substream)
 {
@@ -190,9 +190,9 @@ static int ftssp010_i2s_prepare(struct snd_pcm_substream *substream)
 }
 
 /**
- * @brief CPU DAI action trigger
+ * ftssp010_i2s_trigger() - CPU DAI action trigger
  *
- * Called by soc_pcm_trigger()
+ * Called by soc_pcm_trigger().
  */
 static int ftssp010_i2s_trigger(struct snd_pcm_substream *substream, int cmd)
 {
@@ -228,9 +228,9 @@ static int ftssp010_i2s_trigger(struct snd_pcm_substream *substream, int cmd)
  * struct snd_soc_dai_ops functions
  *****************************************************************************/
 /**
- * @brief Setup hardware according to the DAI format
+ * ftssp010_i2s_set_dai_fmt() - Setup hardware according to the DAI format
  *
- * Called by snd_soc_dai_set_fmt()
+ * Called by snd_soc_dai_set_fmt().
  */
 static int ftssp010_i2s_set_dai_fmt(struct snd_soc_dai *cpu_dai,
 		unsigned int fmt)
@@ -299,14 +299,13 @@ static int ftssp010_i2s_set_dai_fmt(struct snd_soc_dai *cpu_dai,
 }
 
 /**
- * @brief Setup system clock
+ * ftssp010_i2s_set_dai_sysclk() - Setup system clock
+ * @cpu_dai:	CPU DAI.
+ * @clk_id:	DAI specific clock ID.
+ * @freq:	new clock frequency in Hz.
+ * @dir:	new clock direction.
  *
- * @param cpu_dai CPU DAI
- * @param clk_id DAI specific clock ID
- * @param freq new clock frequency in Hz
- * @param dir new clock direction
- *
- * Called by snd_soc_dai_set_sysclk()
+ * Called by snd_soc_dai_set_sysclk().
  */
 static int ftssp010_i2s_set_dai_sysclk(struct snd_soc_dai *cpu_dai,
 		int clk_id, unsigned int freq, int dir)
@@ -324,9 +323,9 @@ static struct ftssp010_i2s_dma_params ftssp010_i2s_playback_dma_params;
 static struct ftssp010_i2s_dma_params ftssp010_i2s_capture_dma_params;
 
 /**
- * @brief Get hardware resource of FTSSP010
+ * ftssp010_i2s_probe() - Get hardware resource of FTSSP010
  *
- * Called by soc_probe()
+ * Called by soc_probe().
  */
 static int ftssp010_i2s_probe(struct platform_device *pdev, struct snd_soc_dai *dai)
 {
@@ -405,9 +404,9 @@ err_alloc:
 }
 
 /**
- * @brief Release hardware resource of FTSSP010
+ * ftssp010_i2s_remove() - Release hardware resource of FTSSP010
  *
- * Called by soc_remove()
+ * Called by soc_remove().
  */
 static void ftssp010_i2s_remove(struct platform_device *pdev, struct snd_soc_dai *dai)
 {
@@ -428,8 +427,8 @@ static void ftssp010_i2s_remove(struct platform_device *pdev, struct snd_soc_dai
 				| SNDRV_PCM_FMTBIT_S24 | SNDRV_PCM_FMTBIT_U24 \
 				| SNDRV_PCM_FMTBIT_S32 | SNDRV_PCM_FMTBIT_U32)
 
-/**
- * @brief SoC CPU Digital Audio Interface
+/*
+ * SoC CPU Digital Audio Interface
  */
 struct snd_soc_dai ftssp010_i2s_dai = {
 	.name	= "ftssp010-i2s",

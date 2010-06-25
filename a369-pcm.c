@@ -48,8 +48,8 @@ struct a369_snd_pcm_runtime {
 	int sincr, dincr;
 };
 
-/**
- * @brief hardware information
+/*
+ * Hardware information
  *
  * This structure will be copied to runtime->hw by snd_soc_set_runtime_hwparams()
  * runtime->hw is in turn used by snd_pcm_hw_constraints_complete()
@@ -178,9 +178,10 @@ static void a369_snd_pcm_irq(int ch, u16 int_status, void * data)
  * struct snd_pcm_ops functions
  *****************************************************************************/
 /**
- * @brief Open platform - allocate PCM runtime private data
+ * a369_snd_pcm_open() - Open platform
  *
- * Called by soc_pcm_open()
+ * Allocate PCM runtime private data.
+ * Called by soc_pcm_open().
  */
 static int a369_snd_pcm_open(struct snd_pcm_substream *substream)
 {
@@ -221,9 +222,10 @@ err_req_dma:
 }
 
 /**
- * @brief Close platform - release PCM runtime private data
+ * a369_snd_pcm_close() - Close platform
  *
- * Called by soc_codec_close()
+ * Release PCM runtime private data.
+ * Called by soc_codec_close().
  */
 static int a369_snd_pcm_close(struct snd_pcm_substream *substream)
 {
@@ -238,9 +240,9 @@ static int a369_snd_pcm_close(struct snd_pcm_substream *substream)
 }
 
 /**
- * @brief Setup DMA resources according to hardware parameters
+ * a369_snd_pcm_hw_params() - Setup DMA resources according to hardware parameters
  *
- * Called by soc_pcm_hw_params()
+ * Called by soc_pcm_hw_params().
  */
 static int a369_snd_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
@@ -249,9 +251,9 @@ static int a369_snd_pcm_hw_params(struct snd_pcm_substream *substream,
 }
 
 /**
- * @brief Free DMA resources
+ * a369_snd_pcm_hw_free() - Free DMA resources
  *
- * Called by soc_pcm_hw_free()
+ * Called by soc_pcm_hw_free().
  */
 static int a369_snd_pcm_hw_free(struct snd_pcm_substream *substream)
 {
@@ -259,9 +261,9 @@ static int a369_snd_pcm_hw_free(struct snd_pcm_substream *substream)
 }
 
 /**
- * @brief DMA preparation
+ * a369_snd_pcm_prepare() - DMA preparation
  *
- * Called by soc_pcm_prepare()
+ * Called by soc_pcm_prepare().
  */
 static int a369_snd_pcm_prepare(struct snd_pcm_substream *substream)
 {
@@ -275,9 +277,9 @@ static int a369_snd_pcm_prepare(struct snd_pcm_substream *substream)
 }
 
 /**
- * @brief DMA action trigger
+ * a369_snd_pcm_trigger() - DMA action trigger
  *
- * Called by soc_pcm_trigger()
+ * Called by soc_pcm_trigger().
  */
 static int a369_snd_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
@@ -302,13 +304,13 @@ static int a369_snd_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 }
 
 /**
- * @brief Returns the hardware progress of moving data.
+ * a369_snd_pcm_pointer() - Returns the hardware progress of moving data
  *
- * @return how many frames have been moved
- * @retval SNDRV_PCM_POS_XRUN overrun or underrun
+ * Returns how many frames have been moved
+ * or SNDRV_PCM_POS_XRUN for overrun or underrun.
  *
  * This function will be assigned to soc_pcm_ops.pointer in soc_new_pcm()
- * and then be called by snd_pcm_update_hw_ptr_pos()
+ * and then be called by snd_pcm_update_hw_ptr_pos().
  */
 static snd_pcm_uframes_t
 a369_snd_pcm_pointer(struct snd_pcm_substream *substream)
@@ -335,10 +337,10 @@ a369_snd_pcm_pointer(struct snd_pcm_substream *substream)
 }
 
 /**
- * @brief mmap DMA buffer
+ * a369_snd_pcm_mmap() - mmap DMA buffer
  *
  * This function will be assigned to soc_pcm_ops.mmap in soc_new_pcm()
- * and then be called by snd_pcm_mmap_data()
+ * and then be called by snd_pcm_mmap_data().
  */
 static int a369_snd_pcm_mmap(struct snd_pcm_substream *substream,
 	struct vm_area_struct *vma)
@@ -351,8 +353,8 @@ static int a369_snd_pcm_mmap(struct snd_pcm_substream *substream,
 				     runtime->dma_bytes);
 }
 
-/**
- * @brief PCM operations
+/*
+ * PCM operations
  *
  * DMA stuff
  */
@@ -395,9 +397,9 @@ static int a369_snd_soc_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stre
 static u64 a369_snd_soc_pcm_dmamask = DMA_32BIT_MASK;
 
 /**
- * @brief SoC platform PCM constructor
+ * a369_snd_soc_pcm_new() - SoC platform PCM constructor
  *
- * Called by soc_new_pcm()
+ * Called by soc_new_pcm().
  */
 static int a369_snd_soc_pcm_new(struct snd_card *card, struct snd_soc_dai *dai,
 	struct snd_pcm *pcm)
@@ -428,7 +430,7 @@ out:
 }
 
 /**
- * @brief SoC platform PCM destructor
+ * a369_snd_soc_pcm_free() - SoC platform PCM destructor
  *
  * This function will be assigned to pcm->private_free in soc_new_pcm()
  * and called by snd_pcm_free() later.
@@ -454,8 +456,8 @@ static void a369_snd_soc_pcm_free(struct snd_pcm *pcm)
 	}
 }
 
-/**
- * @brief SoC Platform Interface
+/*
+ * SoC Platform Interface
  */
 struct snd_soc_platform a369_snd_soc_platform = {
 	.name		= "a369-audio",
