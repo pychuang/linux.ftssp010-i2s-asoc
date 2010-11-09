@@ -166,64 +166,6 @@ static int ftssp010_i2s_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-/**
- * ftssp010_i2s_prepare() - CPU DAI preparation
- *
- * Called by soc_pcm_prepare().
- */
-static int ftssp010_i2s_prepare(struct snd_pcm_substream *substream)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
-	struct ftssp010_i2s *ftssp010_i2s = cpu_dai->private_data;
-	unsigned int icr;
-
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		icr = FTSSP010_ICR_TFDMA | FTSSP010_ICR_TFTHOD(12);
-	} else {
-		icr = FTSSP010_ICR_RFDMA | FTSSP010_ICR_RFTHOD(4);
-	}
-
-	printk(KERN_DEBUG "ftssp010-i2s: [ICR] = %08x\n", icr);
-	iowrite32(icr, ftssp010_i2s->base + FTSSP010_OFFSET_ICR);
-	return 0;
-}
-
-/**
- * ftssp010_i2s_trigger() - CPU DAI action trigger
- *
- * Called by soc_pcm_trigger().
- */
-static int ftssp010_i2s_trigger(struct snd_pcm_substream *substream, int cmd)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
-	struct ftssp010_i2s *ftssp010_i2s = cpu_dai->private_data;
-	unsigned int cr2;
-
-	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_START:
-		cr2 = FTSSP010_CR2_SSPEN | FTSSP010_CR2_TXDOE;
-		cr2 |= FTSSP010_CR2_RXFCLR | FTSSP010_CR2_TXFCLR;
-		break;
-
-	case SNDRV_PCM_TRIGGER_RESUME:
-	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-	case SNDRV_PCM_TRIGGER_STOP:
-	case SNDRV_PCM_TRIGGER_SUSPEND:
-	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		cr2 = 0;
-		break;
-
-	default:
-		return -EINVAL;
-	}
-
-	printk(KERN_DEBUG "ftssp010-i2s: [CR2] = %08x\n", cr2);
-	iowrite32(cr2, ftssp010_i2s->base + FTSSP010_OFFSET_CR2);
-	return 0;
-}
-
 /******************************************************************************
  * struct snd_soc_dai_ops functions
  *****************************************************************************/
@@ -333,6 +275,7 @@ static int ftssp010_i2s_probe(struct platform_device *pdev, struct snd_soc_dai *
 	struct resource *res;
 	int irq;
 	int ret;
+	unsigned int reg;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
@@ -391,6 +334,16 @@ static int ftssp010_i2s_probe(struct platform_device *pdev, struct snd_soc_dai *
 	printk(KERN_INFO "ftssp010-i2s: irq %d, mapped at %p\n", irq,
 		ftssp010_i2s->base);
 
+	reg = FTSSP010_CR2_SSPEN | FTSSP010_CR2_TXDOE
+	    | FTSSP010_CR2_RXFCLR | FTSSP010_CR2_TXFCLR;
+	printk(KERN_DEBUG "ftssp010-i2s: [CR2] = %08x\n", reg);
+	iowrite32(reg, ftssp010_i2s->base + FTSSP010_OFFSET_CR2);
+
+	reg = FTSSP010_ICR_TFDMA | FTSSP010_ICR_TFTHOD(12)
+	    | FTSSP010_ICR_RFDMA | FTSSP010_ICR_RFTHOD(4);
+	printk(KERN_DEBUG "ftssp010-i2s: [ICR] = %08x\n", reg);
+	iowrite32(reg, ftssp010_i2s->base + FTSSP010_OFFSET_ICR);
+
 	return 0;
 
 err_irq:
@@ -411,6 +364,9 @@ err_alloc:
 static void ftssp010_i2s_remove(struct platform_device *pdev, struct snd_soc_dai *dai)
 {
 	struct ftssp010_i2s *ftssp010_i2s = dai->private_data;
+
+	/* disable FTSSP010 */
+	iowrite32(0, ftssp010_i2s->base + FTSSP010_OFFSET_CR2);
 
 	dai->private_data = NULL;
 	free_irq(ftssp010_i2s->irq, ftssp010_i2s);
@@ -451,8 +407,6 @@ struct snd_soc_dai ftssp010_i2s_dai = {
 	.ops = {
 		.startup	= ftssp010_i2s_startup,
 		.hw_params	= ftssp010_i2s_hw_params,
-		.prepare	= ftssp010_i2s_prepare,
-		.trigger	= ftssp010_i2s_trigger,
 	},
 	.dai_ops = {
 		.set_fmt	= ftssp010_i2s_set_dai_fmt,
