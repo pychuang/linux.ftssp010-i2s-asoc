@@ -20,11 +20,13 @@
  */
 
 #include <linux/dma-mapping.h>
+#include <linux/dmaengine.h>
+#include <linux/slab.h>
 #include <sound/core.h>
 #include <sound/soc.h>
 
-#include <mach/apb_dma.h>
-#include <mach/platform/apb_dma.h>
+#include <mach/ftapbb020.h>
+#include <mach/dma-a369.h>
 
 #include "a369-pcm.h"
 #include "ftssp010-i2s.h"
@@ -39,17 +41,22 @@
  * playback direction. 
  */
 struct a369_snd_pcm_runtime {
-	int channel;
-	struct ftssp010_i2s_dma_params *dma_params;
+	struct dma_chan *dma_chan;
+	struct ftapbb020_dma_slave slave;
+	struct tasklet_struct tasklet;
+	struct snd_pcm_substream *substream;
 	int period;
-	dma_addr_t reg_addr;	/* physical address of ftssp010 data register */
 	size_t period_bytes;	/* # of bytes per period */
-	int stype, dtype;
-	int sincr, dincr;
 };
 
-/*
- * Hardware information
+/**
+ * struct snd_pcm_hardware - Hardware information.
+ * @buffer_bytes_max: max size of buffer in bytes
+ * @period_bytes_min: min size of period in bytes
+ * @period_bytes_max: max size of period in bytes
+ * @periods_min: min # of periods in the buffer
+ * @periods_max: max # of periods in the buffer
+ * @fifo_size: not used
  *
  * This structure will be copied to runtime->hw by snd_soc_set_runtime_hwparams()
  * runtime->hw is in turn used by snd_pcm_hw_constraints_complete()
@@ -60,118 +67,90 @@ static struct snd_pcm_hardware a369_snd_pcm_hardware = {
 		| SNDRV_PCM_INFO_MMAP
 		| SNDRV_PCM_INFO_MMAP_VALID
 		| SNDRV_PCM_INFO_PAUSE,
-	.buffer_bytes_max	= 0x40000,	/* max size of buffer in bytes */
-	.period_bytes_min	= 1,		/* min size of period in bytes */
-	.period_bytes_max	= 0xffffff,	/* max size of period in bytes */
-	.periods_min		= 2,		/* min # of periods in the buffer */
-	.periods_max		= 256,		/* max # of periods in the buffer */
-	.fifo_size		= 0,		/* not used */
+	.buffer_bytes_max	= 0x40000,
+	.period_bytes_min	= 1,
+	.period_bytes_max	= 0xffffff,
+	.periods_min		= 2,
+	.periods_max		= 256,
+	.fifo_size		= 0,
 };
 
 /******************************************************************************
- * APB DMA internal functions
+ * DMA internal functions
  *****************************************************************************/
-static void a369_snd_pcm_setup_dma(struct snd_pcm_substream *substream)
+static void a369_snd_pcm_dma_complete(void *param)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct a369_snd_pcm_runtime *a369rtd = runtime->private_data;
-	int width;
-	int incr;
-	int count;
-	int dreqsel;
-
-	a369rtd->reg_addr = a369rtd->dma_params->reg_addr;
-	a369rtd->period_bytes = snd_pcm_lib_period_bytes(substream);
-
-	switch (a369rtd->dma_params->width) {
-	case 8:
-		width = APBDMA_WIDTH_8BIT;
-		incr = APBDMA_CTL_INC1;
-		count = a369rtd->period_bytes;
-		break;
-
-	case 16:
-		width = APBDMA_WIDTH_16BIT;
-		incr = APBDMA_CTL_INC2;
-		count = a369rtd->period_bytes / 2;
-		break;
-
-	case 32:
-		width = APBDMA_WIDTH_32BIT;
-		incr = APBDMA_CTL_INC4;
-		count = a369rtd->period_bytes / 4;
-		break;
-
-	default:
-		printk(KERN_ERR "Invalid data width %d\n", a369rtd->dma_params->width);
-		BUG();
-	}
-
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		a369rtd->sincr = incr;
-		a369rtd->dincr = 0;
-		dreqsel = SSP_APBDMA_REQ_0;
-		a369rtd->stype = APBDMA_TYPE_AHB;
-		a369rtd->dtype = APBDMA_TYPE_APB;
-	} else {
-		a369rtd->sincr = 0;
-		a369rtd->dincr = incr;
-		dreqsel = SSP_APBDMA_ACK_0;
-		a369rtd->stype = APBDMA_TYPE_APB;
-		a369rtd->dtype = APBDMA_TYPE_AHB;
-	}
-
-	fa_set_apb_dma_transfer_params(a369rtd->channel, 0, dreqsel,
-		width, 0, count, INT_DMA_ERROR | INT_DMA_TRIGGER);
-}
-
-static void a369_snd_pcm_enqueue_dma(struct snd_pcm_substream *substream)
-{
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct a369_snd_pcm_runtime *a369rtd = runtime->private_data;
-	size_t dma_offset;
-	dma_addr_t dma_pos;
-	dma_addr_t saddr, daddr;
-
-	dma_offset = a369rtd->period * a369rtd->period_bytes;
-	dma_pos = runtime->dma_addr + dma_offset;
-
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		saddr = dma_pos;
-		daddr = a369rtd->reg_addr;
-	} else {
-		saddr = a369rtd->reg_addr;
-		daddr = dma_pos;
-	}
-
-	fa_set_apb_dma_src_params(a369rtd->channel, saddr, a369rtd->stype,
-		a369rtd->sincr);
-	fa_set_apb_dma_dst_params(a369rtd->channel, daddr, a369rtd->dtype,
-		a369rtd->dincr);
+	struct a369_snd_pcm_runtime *a369rtd = param;
+	struct snd_pcm_substream *ss = a369rtd->substream;
+	struct snd_pcm_runtime *rt = ss->runtime;
 
 	a369rtd->period++;
-	if (a369rtd->period == runtime->periods) {
+	if (a369rtd->period == rt->periods)
 		a369rtd->period = 0;
+
+	/* dma completion handler cannot submit new operations */
+	if (snd_pcm_running(ss)) {
+		snd_pcm_period_elapsed(ss);
+		tasklet_schedule(&a369rtd->tasklet);
 	}
 }
 
-/******************************************************************************
- * APB DMA callback function
- *****************************************************************************/
-static void a369_snd_pcm_irq(int ch, u16 int_status, void * data)
+static struct dma_async_tx_descriptor *a369_snd_pcm_dma_prepare(
+		struct a369_snd_pcm_runtime *a369rtd,
+		dma_addr_t dma_addr, unsigned int len)
 {
-	struct snd_pcm_substream *substream = data;
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct a369_snd_pcm_runtime *a369rtd = runtime->private_data;
+	struct snd_pcm_substream *ss = a369rtd->substream;
+	struct dma_chan *chan = a369rtd->dma_chan;
+	struct dma_async_tx_descriptor *desc;
+	enum dma_data_direction direction;
+	struct scatterlist sg;
 
-	if (int_status != INT_DMA_TRIGGER)
-		return;
+	if (ss->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		direction = DMA_TO_DEVICE;
+	else
+		direction = DMA_FROM_DEVICE;
 
-	if (snd_pcm_running(substream)) {
-		snd_pcm_period_elapsed(substream);
-		a369_snd_pcm_enqueue_dma(substream);
-		fa_apb_dma_start(a369rtd->channel);
-	}
+	sg_init_table(&sg, 1);
+	sg_set_page(&sg, pfn_to_page(PFN_DOWN(dma_addr)), len,
+		dma_addr & (PAGE_SIZE - 1));
+	sg_dma_address(&sg) = dma_addr;
+
+	desc = chan->device->device_prep_slave_sg(chan, &sg, 1, direction,
+		DMA_PREP_INTERRUPT | DMA_CTRL_ACK |
+		DMA_COMPL_SKIP_SRC_UNMAP | DMA_COMPL_SKIP_DEST_UNMAP);
+
+	desc->callback = a369_snd_pcm_dma_complete;
+	desc->callback_param = a369rtd;
+	return desc;
+}
+
+static void a369_snd_pcm_dma_issue_pending(struct a369_snd_pcm_runtime *a369rtd)
+{
+	struct dma_chan *chan = a369rtd->dma_chan;
+
+	chan->device->device_issue_pending(chan);
+}
+/******************************************************************************
+ * tasklet - transfer a period of data
+ *****************************************************************************/
+static void a369_snd_pcm_tasklet(unsigned long data)
+{
+	struct a369_snd_pcm_runtime *a369rtd = (struct a369_snd_pcm_runtime *)data;
+	struct snd_pcm_substream *ss = a369rtd->substream;
+	struct snd_pcm_runtime *rt = ss->runtime;
+	struct dma_async_tx_descriptor *desc;
+	size_t dma_offset;
+	dma_addr_t dma_pos;
+
+	dma_offset = a369rtd->period * a369rtd->period_bytes;
+	dma_pos = rt->dma_addr + dma_offset;
+
+	desc = a369_snd_pcm_dma_prepare(a369rtd, dma_pos, a369rtd->period_bytes);
+
+	/* submit to DMA engine */
+	desc->tx_submit(desc);
+
+	a369_snd_pcm_dma_issue_pending(a369rtd);
 }
 
 /******************************************************************************
@@ -183,40 +162,65 @@ static void a369_snd_pcm_irq(int ch, u16 int_status, void * data)
  * Allocate PCM runtime private data.
  * Called by soc_pcm_open().
  */
-static int a369_snd_pcm_open(struct snd_pcm_substream *substream)
+static int a369_snd_pcm_open(struct snd_pcm_substream *ss)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct device *dev = ss->pcm->card->dev;
+	struct snd_soc_pcm_runtime *rtd = ss->private_data;
 	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
-	struct ftssp010_i2s_dma_params *dma_params = cpu_dai->dma_data;
-	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct snd_pcm_runtime *rt = ss->runtime;
+	struct ftssp010_i2s_dma_params *dma_params;
 	struct a369_snd_pcm_runtime *a369rtd;
+	struct dma_chan *dma_chan;
+	dma_cap_mask_t mask;
 	int ret;
 
+	dma_params = snd_soc_dai_get_dma_data(cpu_dai, ss);
 	if (!dma_params)
 		return -ENODEV;
 
-	snd_soc_set_runtime_hwparams(substream, &a369_snd_pcm_hardware);
+	snd_soc_set_runtime_hwparams(ss, &a369_snd_pcm_hardware);
 
 	a369rtd = kzalloc(sizeof(*a369rtd), GFP_KERNEL);
 	if (!a369rtd)
 		return -ENOMEM;
 
-	runtime->private_data = a369rtd;
+	rt->private_data = a369rtd;
 
-	a369rtd->dma_params = dma_params;
-
-	ret = fa_request_apb_dma_auto(0, "ftssp010-i2s-pcm",
-		a369_snd_pcm_irq, substream, &a369rtd->channel, 0);
-	if (ret) {
-		printk(KERN_ERR "Failed to allocate APB DMA channel\n");
-		goto err_req_dma;
+	a369rtd->substream = ss;
+	if (ss->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		a369rtd->slave.common.direction = DMA_TO_DEVICE;
+		a369rtd->slave.common.dst_addr= dma_params->reg_addr;
+		a369rtd->slave.handshake = A369_APBB_HANDSHAKE_SSP0TX;
+	} else {
+		a369rtd->slave.common.direction = DMA_FROM_DEVICE;
+		a369rtd->slave.common.src_addr= dma_params->reg_addr;
+		a369rtd->slave.handshake = A369_APBB_HANDSHAKE_SSP0RX;
 	}
 
-	printk(KERN_DEBUG "Allocated APB DMA channel %d\n", a369rtd->channel);
+	a369rtd->slave.channels = FTAPBB020_CHANNEL_ALL;
+	a369rtd->slave.type = FTAPBB020_BUS_TYPE_APB;
+
+	tasklet_init(&a369rtd->tasklet, a369_snd_pcm_tasklet,
+		(unsigned long)a369rtd);
+
+	dma_cap_zero(mask);
+	dma_cap_set(DMA_SLAVE, mask);
+	dma_chan = dma_request_channel(mask, ftapbb020_chan_filter, &a369rtd->slave);
+	if (!dma_chan) {
+		dev_err(dev, "Failed to allocate DMA channel\n");
+		ret = -EBUSY;
+		goto err;
+	}
+
+	a369rtd->dma_chan = dma_chan;
+
+	dev_info(dev, "Using %s for DMA transfers\n", dma_chan_name(dma_chan));
+
 	return 0;
 
-err_req_dma:
-	runtime->private_data = NULL;
+err:
+	tasklet_kill(&a369rtd->tasklet);
+	rt->private_data = NULL;
 	kfree(a369rtd);
 	return ret;
 }
@@ -227,14 +231,16 @@ err_req_dma:
  * Release PCM runtime private data.
  * Called by soc_codec_close().
  */
-static int a369_snd_pcm_close(struct snd_pcm_substream *substream)
+static int a369_snd_pcm_close(struct snd_pcm_substream *ss)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct a369_snd_pcm_runtime *a369rtd = runtime->private_data;
+	struct snd_pcm_runtime *rt = ss->runtime;
+	struct a369_snd_pcm_runtime *a369rtd = rt->private_data;
+	struct dma_chan *chan = a369rtd->dma_chan;
 
-	fa_free_apb_dma(a369rtd->channel);
-
-	runtime->private_data = NULL;
+	chan->device->device_control(chan, DMA_TERMINATE_ALL, 0);
+	dma_release_channel(chan);
+	tasklet_kill(&a369rtd->tasklet);
+	rt->private_data = NULL;
 	kfree(a369rtd);
 	return 0;
 }
@@ -244,10 +250,40 @@ static int a369_snd_pcm_close(struct snd_pcm_substream *substream)
  *
  * Called by soc_pcm_hw_params().
  */
-static int a369_snd_pcm_hw_params(struct snd_pcm_substream *substream,
+static int a369_snd_pcm_hw_params(struct snd_pcm_substream *ss,
 	struct snd_pcm_hw_params *params)
 {
-	return snd_pcm_lib_malloc_pages(substream, params_buffer_bytes(params));
+	struct device *dev = ss->pcm->card->dev;
+	struct snd_soc_pcm_runtime *rtd = ss->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
+	struct snd_pcm_runtime *rt = ss->runtime;
+	struct ftssp010_i2s_dma_params *dma_params;
+	struct a369_snd_pcm_runtime *a369rtd = rt->private_data;
+	struct dma_slave_config *slaveconf = &a369rtd->slave.common;
+
+	dma_params = snd_soc_dai_get_dma_data(cpu_dai, ss);
+	if (!dma_params)
+		return -ENODEV;
+
+	switch (dma_params->width) {
+	case 8:
+		slaveconf->src_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+		slaveconf->dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+		break;
+	case 16:
+		slaveconf->src_addr_width = DMA_SLAVE_BUSWIDTH_2_BYTES;
+		slaveconf->dst_addr_width = DMA_SLAVE_BUSWIDTH_2_BYTES;
+		break;
+	case 32:
+		slaveconf->src_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
+		slaveconf->dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
+		break;
+	default:
+		dev_err(dev, "Invalid data width %d\n", dma_params->width);
+		return -EINVAL;
+	}
+
+	return snd_pcm_lib_malloc_pages(ss, params_buffer_bytes(params));
 }
 
 /**
@@ -255,9 +291,9 @@ static int a369_snd_pcm_hw_params(struct snd_pcm_substream *substream,
  *
  * Called by soc_pcm_hw_free().
  */
-static int a369_snd_pcm_hw_free(struct snd_pcm_substream *substream)
+static int a369_snd_pcm_hw_free(struct snd_pcm_substream *ss)
 {
-	return snd_pcm_lib_free_pages(substream);
+	return snd_pcm_lib_free_pages(ss);
 }
 
 /**
@@ -265,14 +301,13 @@ static int a369_snd_pcm_hw_free(struct snd_pcm_substream *substream)
  *
  * Called by soc_pcm_prepare().
  */
-static int a369_snd_pcm_prepare(struct snd_pcm_substream *substream)
+static int a369_snd_pcm_prepare(struct snd_pcm_substream *ss)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct a369_snd_pcm_runtime *a369rtd = runtime->private_data;
+	struct snd_pcm_runtime *rt = ss->runtime;
+	struct a369_snd_pcm_runtime *a369rtd = rt->private_data;
 
 	a369rtd->period = 0;
-	a369_snd_pcm_setup_dma(substream);
-	a369_snd_pcm_enqueue_dma(substream);
+	a369rtd->period_bytes = snd_pcm_lib_period_bytes(ss);
 	return 0;
 }
 
@@ -281,19 +316,18 @@ static int a369_snd_pcm_prepare(struct snd_pcm_substream *substream)
  *
  * Called by soc_pcm_trigger().
  */
-static int a369_snd_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
+static int a369_snd_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct a369_snd_pcm_runtime *a369rtd = runtime->private_data;
+	struct snd_pcm_runtime *rt = ss->runtime;
+	struct a369_snd_pcm_runtime *a369rtd = rt->private_data;
 	int ret = 0;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
-		fa_apb_dma_start(a369rtd->channel);
+		tasklet_schedule(&a369rtd->tasklet);
 		break;
 
 	case SNDRV_PCM_TRIGGER_STOP:
-		fa_apb_dma_stop(a369rtd->channel);
 		break;
 
 	default:
@@ -306,34 +340,29 @@ static int a369_snd_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 /**
  * a369_snd_pcm_pointer() - Returns the hardware progress of moving data
  *
- * Returns how many frames have been moved
+ * Returns offset to buffer in frames
  * or SNDRV_PCM_POS_XRUN for overrun or underrun.
  *
  * This function will be assigned to soc_pcm_ops.pointer in soc_new_pcm()
- * and then be called by snd_pcm_update_hw_ptr_pos().
+ * and then be called by snd_pcm_update_hw_ptr0().
  */
 static snd_pcm_uframes_t
-a369_snd_pcm_pointer(struct snd_pcm_substream *substream)
+a369_snd_pcm_pointer(struct snd_pcm_substream *ss)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct a369_snd_pcm_runtime *a369rtd = runtime->private_data;
-	dma_addr_t ptr;
-	snd_pcm_uframes_t offset;
+	struct snd_pcm_runtime *rt = ss->runtime;
+	struct a369_snd_pcm_runtime *a369rtd = rt->private_data;
+	size_t offset;
+	snd_pcm_uframes_t pointer;
 
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		ptr = fa_apb_dma_get_src_addr(a369rtd->channel);
-	} else {
-		ptr = fa_apb_dma_get_dest_addr(a369rtd->channel);
-	}
+	offset = a369rtd->period * a369rtd->period_bytes;
+	pointer = bytes_to_frames(rt, offset);
 
-	offset = bytes_to_frames(runtime, ptr - runtime->dma_addr);
-
-	if (offset == runtime->buffer_size)
+	if (pointer == rt->buffer_size)
 		return 0;
-	else if (offset > runtime->buffer_size)
+	else if (pointer > rt->buffer_size)
 		return SNDRV_PCM_POS_XRUN;
 
-	return offset;
+	return pointer;
 }
 
 /**
@@ -342,15 +371,15 @@ a369_snd_pcm_pointer(struct snd_pcm_substream *substream)
  * This function will be assigned to soc_pcm_ops.mmap in soc_new_pcm()
  * and then be called by snd_pcm_mmap_data().
  */
-static int a369_snd_pcm_mmap(struct snd_pcm_substream *substream,
+static int a369_snd_pcm_mmap(struct snd_pcm_substream *ss,
 	struct vm_area_struct *vma)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct snd_pcm_runtime *rt = ss->runtime;
 
-	return dma_mmap_writecombine(substream->pcm->card->dev, vma,
-				     runtime->dma_area,
-				     runtime->dma_addr,
-				     runtime->dma_bytes);
+	return dma_mmap_writecombine(ss->pcm->card->dev, vma,
+				     rt->dma_area,
+				     rt->dma_addr,
+				     rt->dma_bytes);
 }
 
 /*
@@ -375,18 +404,19 @@ static struct snd_pcm_ops a369_snd_pcm_ops = {
  *****************************************************************************/
 static int a369_snd_soc_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stream)
 {
-	struct snd_pcm_substream *substream = pcm->streams[stream].substream;
-	struct snd_dma_buffer *buf = &substream->dma_buffer;
+	struct device *dev = pcm->card->dev;
+	struct snd_pcm_substream *ss = pcm->streams[stream].substream;
+	struct snd_dma_buffer *buf = &ss->dma_buffer;
 	size_t size = a369_snd_pcm_hardware.buffer_bytes_max;
 
 	buf->dev.type		= SNDRV_DMA_TYPE_DEV;
-	buf->dev.dev		= pcm->card->dev;
+	buf->dev.dev		= dev;
 	buf->private_data	= NULL;
 	buf->area		= dma_alloc_writecombine(pcm->card->dev, size,
 					&buf->addr, GFP_KERNEL);
 
 	if (!buf->area) {
-		printk(KERN_ERR "Failed to preallocate dma buffer\n");
+		dev_err(dev, "Failed to preallocate dma buffer\n");
 		return -ENOMEM;
 	}
 
@@ -394,7 +424,7 @@ static int a369_snd_soc_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stre
 	return 0;
 }
 
-static u64 a369_snd_soc_pcm_dmamask = DMA_32BIT_MASK;
+static u64 a369_snd_soc_pcm_dmamask = DMA_BIT_MASK(32);
 
 /**
  * a369_snd_soc_pcm_new() - SoC platform PCM constructor
@@ -410,7 +440,7 @@ static int a369_snd_soc_pcm_new(struct snd_card *card, struct snd_soc_dai *dai,
 		card->dev->dma_mask = &a369_snd_soc_pcm_dmamask;
 
 	if (!card->dev->coherent_dma_mask)
-		card->dev->coherent_dma_mask = DMA_32BIT_MASK;
+		card->dev->coherent_dma_mask = DMA_BIT_MASK(32);
 
 	if (dai->playback.channels_min) {
 		ret = a369_snd_soc_pcm_preallocate_dma_buffer(pcm,
@@ -437,16 +467,16 @@ out:
  */
 static void a369_snd_soc_pcm_free(struct snd_pcm *pcm)
 {
-	struct snd_pcm_substream *substream;
+	struct snd_pcm_substream *ss;
 	struct snd_dma_buffer *buf;
 	int stream;
 
 	for (stream = 0; stream < 2; stream++) {
-		substream = pcm->streams[stream].substream;
-		if (!substream)
+		ss = pcm->streams[stream].substream;
+		if (!ss)
 			continue;
 
-		buf = &substream->dma_buffer;
+		buf = &ss->dma_buffer;
 		if (!buf->area)
 			continue;
 
@@ -466,6 +496,18 @@ struct snd_soc_platform a369_snd_soc_platform = {
 	.pcm_free	= a369_snd_soc_pcm_free,
 };
 EXPORT_SYMBOL_GPL(a369_snd_soc_platform);
+
+static int __init a369_snd_soc_platform_init(void)
+{
+	return snd_soc_register_platform(&a369_snd_soc_platform);
+}
+module_init(a369_snd_soc_platform_init);
+
+static void __exit a369_snd_soc_platform_exit(void)
+{
+	snd_soc_unregister_platform(&a369_snd_soc_platform);
+}
+module_exit(a369_snd_soc_platform_exit);
 
 MODULE_AUTHOR("Po-Yu Chuang <ratbert@faraday-tech.com>");
 MODULE_DESCRIPTION("A369 PCM DMA module");

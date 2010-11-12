@@ -19,6 +19,7 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/timer.h>
@@ -38,36 +39,33 @@
 #include "ftssp010-i2s.h"
 #include "a369-pcm.h"
 
+static struct clk *clk;
+
 /******************************************************************************
  * struct snd_soc_ops functions
  *****************************************************************************/
+
 /**
  * a369evb_snd_soc_hw_params() - Setup according to hardware parameters
  *
  * Called by soc_pcm_hw_params().
  */
-static int a369evb_snd_soc_hw_params(struct snd_pcm_substream *substream,
+static int a369evb_snd_soc_hw_params(struct snd_pcm_substream *ss,
 	struct snd_pcm_hw_params *params)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct device *dev = ss->pcm->card->dev;
+	struct snd_soc_pcm_runtime *rtd = ss->private_data;
 	struct snd_soc_dai *codec_dai = rtd->dai->codec_dai;
 	struct snd_soc_dai *cpu_dai = rtd->dai->cpu_dai;
 	unsigned int rate = params_rate(params);
-	unsigned int clk = 0;
+	unsigned int sysclk;
 	unsigned int fmt;
 	int ret = 0;
 
-	switch (rate) {
-	case 8000:
-	case 16000:
-	case 48000:
-	case 96000:
-	case 192000:
-		clk = 12288000;
-		break;
+	sysclk = clk_get_rate(clk);
 
-	default:
-		printk(KERN_ERR "Sample rate %d not supported\n", rate);
+	if (sysclk % rate) {
+		dev_err(dev, "Sample rate %d not supported\n", rate);
 		return -EINVAL;
 	}
 
@@ -76,29 +74,29 @@ static int a369evb_snd_soc_hw_params(struct snd_pcm_substream *substream,
 	/* set codec DAI configuration */
 	ret = snd_soc_dai_set_fmt(codec_dai, fmt);
 	if (ret < 0) {
-		printk(KERN_ERR "Failed to set codec DAI format\n");
+		dev_err(dev, "Failed to set codec DAI format\n");
 		return ret;
 	}
 
 	/* set cpu DAI configuration */
 	ret = snd_soc_dai_set_fmt(cpu_dai, fmt);
 	if (ret < 0) {
-		printk(KERN_ERR "Failed to set CPU DAI format\n");
+		dev_err(dev, "Failed to set CPU DAI format\n");
 		return ret;
 	}
 
 	/* set the codec system clock for DAC and ADC */
-	ret = snd_soc_dai_set_sysclk(codec_dai, WM8731_SYSCLK, clk,
+	ret = snd_soc_dai_set_sysclk(codec_dai, WM8731_SYSCLK, sysclk,
 		SND_SOC_CLOCK_IN);
 	if (ret < 0) {
-		printk(KERN_ERR "Failed to set codec DAI system clock\n");
+		dev_err(dev, "Failed to set codec DAI system clock\n");
 		return ret;
 	}
 
 	/* set the I2S system clock as input */
-	ret = snd_soc_dai_set_sysclk(cpu_dai, 0, clk, SND_SOC_CLOCK_IN);
+	ret = snd_soc_dai_set_sysclk(cpu_dai, 0, sysclk, SND_SOC_CLOCK_IN);
 	if (ret < 0) {
-		printk(KERN_ERR "Failed to set CPU DAI system clock\n");
+		dev_err(dev, "Failed to set CPU DAI system clock\n");
 		return ret;
 	}
 
@@ -173,20 +171,11 @@ static struct snd_soc_dai_link a369evb_snd_soc_dai_link = {
  *
  * Board specific stuffs
  */
-static struct snd_soc_machine a369evb_snd_soc_machine = {
+static struct snd_soc_card a369evb_snd_soc_card = {
 	.name		= "a369evb",
+	.platform	= &a369_snd_soc_platform,
 	.dai_link	= &a369evb_snd_soc_dai_link,
 	.num_links	= 1,
-};
-
-/*
- * a369evb audio private data
- *
- * Codec data
- */
-static struct wm8731_setup_data a369evb_wm8731_setup_data = {
-	.i2c_bus	= 0,
-	.i2c_address	= 0x1b,
 };
 
 /*
@@ -195,68 +184,56 @@ static struct wm8731_setup_data a369evb_wm8731_setup_data = {
  * This structure collects all the stuffs
  */
 static struct snd_soc_device a369evb_snd_soc_device = {
-	.machine	= &a369evb_snd_soc_machine,
-	.platform	= &a369_snd_soc_platform,
+	.card		= &a369evb_snd_soc_card,
 	.codec_dev	= &soc_codec_dev_wm8731,
-	.codec_data	= &a369evb_wm8731_setup_data,
 };
 
 /******************************************************************************
  * initialization / finalization
  *****************************************************************************/
-static struct resource ftssp010_i2s_resources[] = {
-	{
-		.start	= SSP_FTSSP010_0_PA_BASE,
-		.end	= SSP_FTSSP010_0_PA_LIMIT,
-		.flags	= IORESOURCE_MEM,
-	}, {
-		.start	= SSP_FTSSP010_0_IRQ,
-		.end	= SSP_FTSSP010_0_IRQ,
-		.flags	= IORESOURCE_IRQ,
-	},
-};
-
 static struct platform_device *a369evb_snd_device;
 
 static int __init a369evb_snd_init(void)
 {
-	unsigned int sclk_cfg1;
 	int ret;
 
-	/*
-	 * Select external clock source (X_SSP_CLK) as SSP0 clock input, or it
-	 * will be (AHB clock * 2) by default.
-	 */
-	sclk_cfg1 = ioread32(SCU_FTSCU010_VA_BASE + FTSCU010_OFFSET_SCLK_CFG1);
-	sclk_cfg1 |= 1 << 4;
-	iowrite32(sclk_cfg1, SCU_FTSCU010_VA_BASE + FTSCU010_OFFSET_SCLK_CFG1);
+	clk = clk_get(NULL, "ssp0-extclk");
+	if (IS_ERR(clk)) {
+		printk(KERN_ERR "%s: Failed to get clock\n", __func__);
+		return -ENODEV;
+	}
+
+	clk_enable(clk);
 
 	a369evb_snd_device = platform_device_alloc("soc-audio", -1);
-	if (!a369evb_snd_device)
-		return -ENOMEM;
+	if (!a369evb_snd_device) {
+		ret = -ENOMEM;
+		goto err_alloc;
+	}
 
 	/* drvdata is used by soc-audio driver in sound/soc/soc-core.c */
 	platform_set_drvdata(a369evb_snd_device, &a369evb_snd_soc_device);
 	a369evb_snd_soc_device.dev = &a369evb_snd_device->dev;
 
-	/* add resources for ftssp010_i2s_dai.probe() */
-	ret = platform_device_add_resources(a369evb_snd_device,
-			ftssp010_i2s_resources, ARRAY_SIZE(ftssp010_i2s_resources));
-	if (ret) {
-		platform_device_put(a369evb_snd_device);
-		return ret;
-	}
-
 	ret = platform_device_add(a369evb_snd_device);
 	if (ret)
-		platform_device_put(a369evb_snd_device);
+		goto err_add;
 
+	return 0;
+
+err_add:
+	platform_device_put(a369evb_snd_device);
+err_alloc:
+	clk_disable(clk);
+	clk_put(clk);
 	return ret;
 }
 
 static void __exit a369evb_snd_exit(void)
 {
 	platform_device_unregister(a369evb_snd_device);
+	clk_disable(clk);
+	clk_put(clk);
 }
 
 module_init(a369evb_snd_init);
