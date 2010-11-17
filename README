@@ -6,17 +6,63 @@ This package includes:
 
 Usage:
 
+(1) put the following code in your platform-dpendent initialization sequence.
+------------------------>8-------------------------->8------------------------
+static struct resource ftssp010_0_i2s_resources[] = {
+	{
+		.start	= A369_FTSSP010_0_PA_BASE,
+		.end	= A369_FTSSP010_0_PA_BASE + SZ_4K - 1,
+		.flags	= IORESOURCE_MEM,
+	}, {
+		.start	= IRQ_A369_FTSSP010_0,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device ftssp010_0_i2s_device = {
+	.name	= "ftssp010-i2s",
+	.id	= 0,
+	.num_resources	= ARRAY_SIZE(ftssp010_0_i2s_resources),
+	.resource	= ftssp010_0_i2s_resources,
+};
+
+static struct i2c_board_info __initdata a369_i2c_devices[] = {
+	{ I2C_BOARD_INFO("wm8731", 0x1b), },
+};
+
+i2c_register_board_info(0, a369_i2c_devices, ARRAY_SIZE(a369_i2c_devices));
+platform_device_register(&ftssp010_0_i2s_device);
+------------------------>8-------------------------->8------------------------
+
+
 (2) apply the following patch to sound/soc/codecs/wm8731.c
 ------------------------>8-------------------------->8------------------------
-@@ -422,7 +422,7 @@
-                break;
-        case SND_SOC_BIAS_STANDBY:
-                /* everything off except vref/vmid, */
--               wm8731_write(codec, WM8731_PWR, reg | 0x0040);
-+               wm8731_write(codec, WM8731_PWR, reg);
+diff --git a/sound/soc/codecs/wm8731.c b/sound/soc/codecs/wm8731.c
+index 0ab9b63..5900c21 100644
+--- a/sound/soc/codecs/wm8731.c
++++ b/sound/soc/codecs/wm8731.c
+@@ -401,7 +401,21 @@ static int wm8731_set_bias_level(struct snd_soc_codec *codec,
+
+                /* Clear PWROFF, gate CLKOUT, everything else as-is */
+                reg = snd_soc_read(codec, WM8731_PWR) & 0xff7f;
++#ifdef CONFIG_ARCH_FARADAY
++               /*
++                * Make sure that CLKOUT of wm8731 will not be powered down.
++                *
++                * We choose external clock source (X_SSP_CLK) as SSP0 clock
++                * input by setting bit 4 of SCLK_CFG1 register of SCU010.
++                * The external clock source (X_SSP_CLK) comes from CLKOUT of
++                * wm8731 on A369 evb. The wm8731 codec driver in Linux gates
++                * CLKOUT by default. We need to apply this patch or there will
++                * be no external clock.
++                */
++               snd_soc_write(codec, WM8731_PWR, reg);
++#else
+                snd_soc_write(codec, WM8731_PWR, reg | 0x0040);
++#endif
                 break;
         case SND_SOC_BIAS_OFF:
-                /* everything off, dac mute, inactive */
+                snd_soc_write(codec, WM8731_ACTIVE, 0x0);
 ------------------------>8-------------------------->8------------------------
 This patch makes sure that CLKOUT of wm8731 will not be powered down.
 
@@ -110,8 +156,8 @@ $ alsactl restore
 
 (7) use aplay and arecord
 
-$ ./aplay/arecord -d 10 -r 96000 -f s16 -c 2 /test.wav
-$ ./aplay/aplay /test.wav
+$ arecord -d 60 -r 96000 -f s16 -c 2 /test.wav
+$ aplay /test.wav
 
 use -h option for help
 
