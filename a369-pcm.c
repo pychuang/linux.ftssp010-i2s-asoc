@@ -26,10 +26,19 @@
 #include <sound/soc.h>
 
 #include <mach/ftapbb020.h>
+#include <mach/ftdmac020.h>
 #include <mach/dma-a369.h>
 
 #include "a369-pcm.h"
 #include "ftssp010-i2s.h"
+
+/*
+ * Specify which dma engine to use:
+ *	ftapbb020 if not defined
+ *	ftdmac020:0 if 0
+ *	ftdmac020:1 if 1
+ */
+#define CONFIG_USE_DMAC	0
 
 /*
  * The period is a term that corresponds to a fragment in the OSS world.
@@ -42,7 +51,11 @@
  */
 struct a369_snd_pcm_runtime {
 	struct dma_chan *dma_chan;
+#ifdef CONFIG_USE_DMAC
+	struct ftdmac020_dma_slave slave;
+#else
 	struct ftapbb020_dma_slave slave;
+#endif
 	struct tasklet_struct tasklet;
 	struct snd_pcm_substream *substream;
 	int period;
@@ -188,28 +201,55 @@ static int a369_snd_pcm_open(struct snd_pcm_substream *ss)
 
 	a369rtd->substream = ss;
 	if (ss->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		a369rtd->slave.common.direction = DMA_TO_DEVICE;
-		a369rtd->slave.common.dst_addr= dma_params->reg_addr;
+#ifdef CONFIG_USE_DMAC
+		ret = a369_dmac_handshake_alloc("ssp0tx");
+		if (ret < 0)
+			goto err_hs;
+
+		a369_dmac_handshake_setup(ret, CONFIG_USE_DMAC);
+		a369rtd->slave.handshake = ret;
+#else
 		a369rtd->slave.handshake = A369_APBB_HANDSHAKE_SSP0TX;
+#endif
+		a369rtd->slave.common.direction = DMA_TO_DEVICE;
+		a369rtd->slave.common.dst_addr = dma_params->reg_addr;
 	} else {
-		a369rtd->slave.common.direction = DMA_FROM_DEVICE;
-		a369rtd->slave.common.src_addr= dma_params->reg_addr;
+#ifdef CONFIG_USE_DMAC
+		ret = a369_dmac_handshake_alloc("ssp0rx");
+		if (ret < 0)
+			goto err_hs;
+
+		a369_dmac_handshake_setup(ret, CONFIG_USE_DMAC);
+		a369rtd->slave.handshake = ret;
+#else
 		a369rtd->slave.handshake = A369_APBB_HANDSHAKE_SSP0RX;
+#endif
+		a369rtd->slave.common.direction = DMA_FROM_DEVICE;
+		a369rtd->slave.common.src_addr = dma_params->reg_addr;
 	}
 
+#ifdef CONFIG_USE_DMAC
+	a369rtd->slave.id = CONFIG_USE_DMAC;
+	a369rtd->slave.channels = FTDMAC020_CHANNEL_ALL;
+#else
 	a369rtd->slave.channels = FTAPBB020_CHANNEL_ALL;
 	a369rtd->slave.type = FTAPBB020_BUS_TYPE_APB;
+#endif
 
 	tasklet_init(&a369rtd->tasklet, a369_snd_pcm_tasklet,
 		(unsigned long)a369rtd);
 
 	dma_cap_zero(mask);
 	dma_cap_set(DMA_SLAVE, mask);
+#ifdef CONFIG_USE_DMAC
+	dma_chan = dma_request_channel(mask, ftdmac020_chan_filter, &a369rtd->slave);
+#else
 	dma_chan = dma_request_channel(mask, ftapbb020_chan_filter, &a369rtd->slave);
+#endif
 	if (!dma_chan) {
 		dev_err(dev, "Failed to allocate DMA channel\n");
 		ret = -EBUSY;
-		goto err;
+		goto err_request;
 	}
 
 	a369rtd->dma_chan = dma_chan;
@@ -218,8 +258,11 @@ static int a369_snd_pcm_open(struct snd_pcm_substream *ss)
 
 	return 0;
 
-err:
+err_request:
 	tasklet_kill(&a369rtd->tasklet);
+#ifdef CONFIG_USE_DMAC
+err_hs:
+#endif
 	rt->private_data = NULL;
 	kfree(a369rtd);
 	return ret;
@@ -239,6 +282,9 @@ static int a369_snd_pcm_close(struct snd_pcm_substream *ss)
 
 	chan->device->device_control(chan, DMA_TERMINATE_ALL, 0);
 	dma_release_channel(chan);
+#ifdef CONFIG_USE_DMAC
+	a369_dmac_handshake_free(a369rtd->slave.handshake);
+#endif
 	tasklet_kill(&a369rtd->tasklet);
 	rt->private_data = NULL;
 	kfree(a369rtd);
